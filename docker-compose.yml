@@ -1,0 +1,329 @@
+version: '3.8'
+
+# Gogidix 133-Service Platform - Local Development Environment
+# Complete microservices platform running locally with Docker Compose
+
+services:
+  # Infrastructure Services
+  postgres:
+    image: postgres:15-alpine
+    container_name: gogidix-postgres
+    environment:
+      POSTGRES_DB: gogidix_platform
+      POSTGRES_USER: gogidix_user
+      POSTGRES_PASSWORD: Gogidix2024!Secure
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - gogidix-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gogidix_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: gogidix-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - gogidix-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongodb:
+    image: mongo:6
+    container_name: gogidix-mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: gogidix
+      MONGO_INITDB_ROOT_PASSWORD: Gogidix2024!Secure
+      MONGO_INITDB_DATABASE: gogidix_nosql
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - gogidix-network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Service Registry (Eureka)
+  service-registry:
+    build:
+      context: ./shared-infrastructure/service-registry
+      dockerfile: Dockerfile
+    container_name: gogidix-service-registry
+    ports:
+      - "8761:8761"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      EUREKA_CLIENT_REGISTER_WITH_EUREKA: "false"
+      EUREKA_CLIENT_FETCH_REGISTRY: "false"
+    networks:
+      - gogidix-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8761/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # API Gateway
+  api-gateway:
+    build:
+      context: ./shared-infrastructure/api-gateway
+      dockerfile: Dockerfile
+    container_name: gogidix-api-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE: http://service-registry:8761/eureka
+    depends_on:
+      - service-registry
+    networks:
+      - gogidix-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Config Server
+  config-server:
+    build:
+      context: ./central-configuration/config-server
+      dockerfile: Dockerfile
+    container_name: gogidix-config-server
+    ports:
+      - "8888:8888"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE: http://service-registry:8761/eureka
+    depends_on:
+      - service-registry
+    networks:
+      - gogidix-network
+
+  # Auth Service
+  auth-service:
+    build:
+      context: ./shared-infrastructure/auth-service
+      dockerfile: Dockerfile
+    container_name: gogidix-auth-service
+    ports:
+      - "9000:9000"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/gogidix_platform
+      SPRING_DATASOURCE_USERNAME: gogidix_user
+      SPRING_DATASOURCE_PASSWORD: Gogidix2024!Secure
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE: http://service-registry:8761/eureka
+    depends_on:
+      - postgres
+      - redis
+      - service-registry
+    networks:
+      - gogidix-network
+
+  # Notification Service
+  notification-service:
+    build:
+      context: ./shared-infrastructure/notification-service
+      dockerfile: Dockerfile
+    container_name: gogidix-notification-service
+    ports:
+      - "9001:9001"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/gogidix_platform
+      SPRING_DATASOURCE_USERNAME: gogidix_user
+      SPRING_DATASOURCE_PASSWORD: Gogidix2024!Secure
+      EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE: http://service-registry:8761/eureka
+    depends_on:
+      - postgres
+      - service-registry
+    networks:
+      - gogidix-network
+
+  # User Profile Service
+  user-profile-service:
+    build:
+      context: ./shared-infrastructure/user-profile-service
+      dockerfile: Dockerfile
+    container_name: gogidix-user-profile-service
+    ports:
+      - "9002:9002"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/gogidix_platform
+      SPRING_DATASOURCE_USERNAME: gogidix_user
+      SPRING_DATASOURCE_PASSWORD: Gogidix2024!Secure
+      EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE: http://service-registry:8761/eureka
+    depends_on:
+      - postgres
+      - service-registry
+      - auth-service
+    networks:
+      - gogidix-network
+
+  # Social Commerce - Marketplace Service
+  marketplace-service:
+    build:
+      context: ./social-commerce/marketplace
+      dockerfile: Dockerfile
+    container_name: gogidix-marketplace
+    ports:
+      - "9100:9100"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/gogidix_platform
+      SPRING_DATASOURCE_USERNAME: gogidix_user
+      SPRING_DATASOURCE_PASSWORD: Gogidix2024!Secure
+      EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE: http://service-registry:8761/eureka
+    depends_on:
+      - postgres
+      - service-registry
+      - auth-service
+    networks:
+      - gogidix-network
+
+  # Social Commerce - Product Service
+  product-service:
+    build:
+      context: ./social-commerce/product-service
+      dockerfile: Dockerfile
+    container_name: gogidix-product-service
+    ports:
+      - "9101:9101"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/gogidix_platform
+      SPRING_DATASOURCE_USERNAME: gogidix_user
+      SPRING_DATASOURCE_PASSWORD: Gogidix2024!Secure
+      EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE: http://service-registry:8761/eureka
+    depends_on:
+      - postgres
+      - service-registry
+    networks:
+      - gogidix-network
+
+  # Social Commerce - Order Service
+  order-service:
+    build:
+      context: ./social-commerce/order-service
+      dockerfile: Dockerfile
+    container_name: gogidix-order-service
+    ports:
+      - "9102:9102"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/gogidix_platform
+      SPRING_DATASOURCE_USERNAME: gogidix_user
+      SPRING_DATASOURCE_PASSWORD: Gogidix2024!Secure
+      EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE: http://service-registry:8761/eureka
+    depends_on:
+      - postgres
+      - service-registry
+      - product-service
+    networks:
+      - gogidix-network
+
+  # Warehousing - Warehouse Management Service
+  warehouse-management-service:
+    build:
+      context: ./warehousing/warehouse-management-service
+      dockerfile: Dockerfile
+    container_name: gogidix-warehouse-management
+    ports:
+      - "9200:9200"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/gogidix_platform
+      SPRING_DATASOURCE_USERNAME: gogidix_user
+      SPRING_DATASOURCE_PASSWORD: Gogidix2024!Secure
+      EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE: http://service-registry:8761/eureka
+    depends_on:
+      - postgres
+      - service-registry
+    networks:
+      - gogidix-network
+
+  # Courier Services - Tracking Service
+  tracking-service:
+    build:
+      context: ./courier-services/tracking-service
+      dockerfile: Dockerfile
+    container_name: gogidix-tracking-service
+    ports:
+      - "9300:9300"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/gogidix_platform
+      SPRING_DATASOURCE_USERNAME: gogidix_user
+      SPRING_DATASOURCE_PASSWORD: Gogidix2024!Secure
+      EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE: http://service-registry:8761/eureka
+    depends_on:
+      - postgres
+      - service-registry
+    networks:
+      - gogidix-network
+
+  # Centralized Dashboard - Analytics Service
+  centralized-analytics:
+    build:
+      context: ./centralized-dashboard/centralized-analytics-dashboard
+      dockerfile: Dockerfile
+    container_name: gogidix-analytics
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: development
+      API_GATEWAY_URL: http://api-gateway:8080
+      MONGODB_URI: mongodb://gogidix:Gogidix2024!Secure@mongodb:27017/gogidix_nosql?authSource=admin
+    depends_on:
+      - mongodb
+      - api-gateway
+    networks:
+      - gogidix-network
+
+  # NGINX Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: gogidix-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - api-gateway
+      - service-registry
+    networks:
+      - gogidix-network
+
+networks:
+  gogidix-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.5.0.0/16
+
+volumes:
+  postgres_data:
+  redis_data:
+  mongo_data:
